@@ -24,22 +24,39 @@ def render_tab_batch(tokenizer, model, id2label: dict) -> None:
     )
 
     uploaded = st.file_uploader("Upload CSV", type=["csv"], label_visibility="collapsed")
-    if uploaded is None:
-        return
 
-    df_input = _read_csv(uploaded)
+    # ── Simpan ke session_state saat file baru di-upload ──────────────────────
+    if uploaded is not None:
+        df_parsed = _read_csv(uploaded)
+        if df_parsed is not None:
+            # Reset hasil lama jika file baru di-upload
+            if st.session_state.get("batch_filename") != uploaded.name:
+                st.session_state.pop("batch_result", None)
+            st.session_state["batch_df"]       = df_parsed
+            st.session_state["batch_filename"] = uploaded.name
+
+    df_input = st.session_state.get("batch_df", None)
+
     if df_input is None:
         return
 
     st.success(f"File berhasil dibaca — {len(df_input):,} tweet ditemukan.")
     st.dataframe(df_input.head(5), use_container_width=True)
+    if len(df_input) > 5:
+        st.caption(f"Menampilkan 5 dari {len(df_input):,} baris. Semua baris akan diproses.")
 
-    if not st.button(f"Proses {len(df_input):,} Tweet", type="primary"):
+    # ── Tombol proses ──────────────────────────────────────────────────────────
+    if st.button(f"Proses {len(df_input):,} Tweet", type="primary"):
+        results   = _run_batch(df_input["tweet_text"].tolist(), tokenizer, model, id2label)
+        df_result = _build_result_df(df_input, results, id2label)
+        st.session_state["batch_result"] = df_result
+
+    df_result = st.session_state.get("batch_result", None)
+
+    if df_result is None:
         return
 
-    results   = _run_batch(df_input["tweet_text"].tolist(), tokenizer, model, id2label)
-    df_result = _build_result_df(df_input, results, id2label)
-
+    # ── Tampilkan hasil ────────────────────────────────────────────────────────
     st.success(f"Selesai! {len(df_result):,} tweet diproses.")
     _render_distribution_chart(df_result)
     _render_preview_table(df_result)
@@ -49,6 +66,10 @@ def render_tab_batch(tokenizer, model, id2label: dict) -> None:
 
 # ── Private helpers ────────────────────────────────────────────────────────────
 
+# Nama kolom yang diterima sebagai teks tweet (urutan prioritas)
+_CANDIDATE_COLUMNS = ["tweet_text", "text", "tweet", "content", "message"]
+
+
 def _read_csv(uploaded_file) -> pd.DataFrame | None:
     try:
         df = pd.read_csv(uploaded_file)
@@ -56,12 +77,21 @@ def _read_csv(uploaded_file) -> pd.DataFrame | None:
         st.error(f"Gagal membaca CSV: {exc}")
         return None
 
-    if "tweet_text" not in df.columns:
+    # Cari kolom teks secara otomatis
+    found_col = next((c for c in _CANDIDATE_COLUMNS if c in df.columns), None)
+
+    if found_col is None:
         st.error(
-            f"Kolom `tweet_text` tidak ditemukan. "
+            f"Kolom teks tidak ditemukan. "
+            f"Pastikan CSV memiliki salah satu kolom berikut: {_CANDIDATE_COLUMNS}. "
             f"Kolom tersedia: {list(df.columns)}"
         )
         return None
+
+    # Normalisasi: rename ke tweet_text agar sisa kode konsisten
+    if found_col != "tweet_text":
+        df = df.rename(columns={found_col: "tweet_text"})
+        st.info(f"Kolom `{found_col}` dideteksi dan digunakan sebagai teks tweet.")
 
     return df
 
@@ -97,10 +127,11 @@ def _build_result_df(
             "predicted_label":    res.label,
             "predicted_display":  res.display_label,
             "confidence":         round(res.confidence, 4),
+            "keterangan":         res.certainty_label,
             "entropy_normalized": round(res.entropy_norm, 4),
-            "top2_label":         top3_labels[1] if len(top3_labels) > 1 else "",
+            "top2_label":         CLASS_LABELS_DISPLAY.get(top3_labels[1], top3_labels[1]) if len(top3_labels) > 1 else "",
             "top2_prob":          round(top3_probs[1], 4) if len(top3_probs) > 1 else 0,
-            "top3_label":         top3_labels[2] if len(top3_labels) > 2 else "",
+            "top3_label":         CLASS_LABELS_DISPLAY.get(top3_labels[2], top3_labels[2]) if len(top3_labels) > 2 else "",
             "top3_prob":          round(top3_probs[2], 4) if len(top3_probs) > 2 else 0,
         }
         for cls, prob in res.probs.items():
@@ -126,18 +157,17 @@ def _render_distribution_chart(df_result: pd.DataFrame) -> None:
         )
         return CLASS_COLORS.get(key, "#7F8C8D")
 
-    fig = go.Figure(go.Bar(
-        y=dist["Kelas"],
-        x=dist["Jumlah"],
-        orientation="h",
-        text=[f"{p}%" for p in dist["Persentase"]],
-        textposition="outside",
-        marker_color=[_display_to_color(c) for c in dist["Kelas"]],
+    fig = go.Figure(go.Pie(
+        labels=dist["Kelas"],
+        values=dist["Jumlah"],
+        marker_colors=[_display_to_color(c) for c in dist["Kelas"]],
+        textinfo="label+percent",
+        hovertemplate="%{label}<br>%{value} tweet (%{percent})<extra></extra>",
+        hole=0.35,
     ))
     fig.update_layout(
-        height=350,
-        margin=dict(l=10, r=60, t=10, b=10),
-        xaxis_title="Jumlah Tweet",
+        height=380,
+        margin=dict(l=10, r=10, t=10, b=10),
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         showlegend=False,
@@ -149,10 +179,10 @@ def _render_preview_table(df_result: pd.DataFrame) -> None:
     st.markdown("#### Preview Hasil (10 baris pertama)")
     preview_cols = [
         "tweet_text", "predicted_display", "confidence",
-        "entropy_normalized", "top2_label", "top2_prob",
+        "keterangan", "entropy_normalized", "top2_label", "top2_prob",
     ]
     visible = [c for c in preview_cols if c in df_result.columns]
-    st.dataframe(df_result[visible].head(10), use_container_width=True)
+    st.dataframe(df_result[visible].head(10), use_container_width=True, height=420)
 
 
 def _render_export_buttons(df_result: pd.DataFrame) -> None:
@@ -186,6 +216,7 @@ def _build_summary_text(df_result: pd.DataFrame) -> str:
     dist.columns = ["Kelas", "Jumlah"]
     dist["Persentase"] = (dist["Jumlah"] / len(df_result) * 100).round(1)
 
+    # ── Header & distribusi ────────────────────────────────────────────────────
     lines = [
         "=== RINGKASAN HASIL KLASIFIKASI BATCH ===",
         f"Timestamp   : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
@@ -196,6 +227,27 @@ def _build_summary_text(df_result: pd.DataFrame) -> str:
             f"  {row['Kelas']:<30} {row['Jumlah']:>4} tweet ({row['Persentase']}%)"
             for _, row in dist.iterrows()
         ],
+        "-------------------------------------",
+    ]
+
+    # ── Detail per baris ──────────────────────────────────────────────────────
+    lines.append("Detail Per Tweet:")
+    lines.append("")
+    for i, row in df_result.iterrows():
+        tweet   = str(row.get("tweet_text", "")).strip()
+        label   = row.get("predicted_display", "-")
+        conf    = float(row.get("confidence", 0)) * 100
+        ket     = row.get("keterangan", "-")
+        top2    = row.get("top2_label", "-")
+        top2p   = float(row.get("top2_prob", 0)) * 100
+        lines += [
+            f"[{i+1:>3}] {tweet[:120]}{'...' if len(tweet) > 120 else ''}",
+            f"       Prediksi  : {label} ({conf:.1f}%) — {ket}",
+            f"       Alternatif: {top2} ({top2p:.1f}%)",
+            "",
+        ]
+
+    lines += [
         "-------------------------------------",
         "Model       : RoBERTa + BiLSTM + Cross-Attention + Focal Loss",
         "by Muhammad Ma'mun Efendi",
