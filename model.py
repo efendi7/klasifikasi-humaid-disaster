@@ -6,6 +6,7 @@ dan fungsi loader yang di-cache oleh Streamlit.
 """
 
 import json
+from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -23,13 +24,6 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # ── Arsitektur ─────────────────────────────────────────────────────────────────
 
 class RoBERTaCrossAttn(nn.Module):
-    """
-    Model D: RoBERTa-base → BiLSTM 2-layer → Cross-Attention → Classifier head.
-
-    Forward returns (logits, attn_weights) sehingga bobot attention bisa
-    divisualisasikan di UI.
-    """
-
     def __init__(
         self,
         model_name: str = ROBERTA_NAME,
@@ -87,14 +81,6 @@ class RoBERTaCrossAttn(nn.Module):
 
 @st.cache_resource(show_spinner="Memuat model RoBERTa-BiLSTM-CrossAttn… (hanya sekali)")
 def load_model_and_tokenizer() -> tuple:
-    """
-    Load tokenizer, model weights, dan id→label mapping.
-    Di-cache oleh Streamlit sehingga hanya berjalan sekali per sesi.
-
-    Returns
-    -------
-    tokenizer, model, id2label
-    """
     tokenizer = AutoTokenizer.from_pretrained(ROBERTA_NAME)
 
     if LABEL_MAP_PATH.exists():
@@ -106,11 +92,13 @@ def load_model_and_tokenizer() -> tuple:
 
     model = RoBERTaCrossAttn(ROBERTA_NAME, len(id2label), HIDDEN_DIM, DROPOUT)
 
-    if not MODEL_PATH.exists():
-        st.error(f"Checkpoint tidak ditemukan: `{MODEL_PATH}`")
+    # FIX: MODEL_PATH sekarang string (dari hf_hub_download), bukan Path
+    model_path = Path(MODEL_PATH)
+    if not model_path.exists():
+        st.error(f"Checkpoint tidak ditemukan: `{model_path}`")
         st.stop()
 
-    ckpt  = torch.load(MODEL_PATH, map_location=DEVICE)
+    ckpt  = torch.load(model_path, map_location=DEVICE)
     state = ckpt.get("model_state_dict", ckpt)
     model.load_state_dict(state, strict=True)
     model.to(DEVICE).eval()
