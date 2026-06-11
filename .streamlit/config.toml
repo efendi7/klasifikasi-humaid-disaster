@@ -1,0 +1,8 @@
+[global]
+disableWatchdogWarning = true
+
+[server]
+fileWatcherType = "none"
+
+[logger]
+level = "error"

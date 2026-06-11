@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual Environment
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+.secrets.toml
+
+# Model besar (opsional)
+*.pt
+*.pth
+*.bin
+
+# Data besar (opsional)
+data/
