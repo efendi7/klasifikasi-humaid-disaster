@@ -6,11 +6,17 @@ Tidak ada logika — hanya data.
 """
 
 from pathlib import Path
+from huggingface_hub import hf_hub_download
 
 # ── Path ───────────────────────────────────────────────────────────────────────
 BASE_DIR       = Path(__file__).parent
-MODEL_PATH     = BASE_DIR / "best_model_D.pt"
 LABEL_MAP_PATH = BASE_DIR / "label_map.json"
+
+# Download model dari HF Hub (cache otomatis, hanya download sekali)
+MODEL_PATH = hf_hub_download(
+    repo_id="efendi247/roberta-bilstm-crossattn-humaid",
+    filename="best_model_D.pt",
+)
 
 # ── Hyperparameter model ───────────────────────────────────────────────────────
 ROBERTA_NAME = "roberta-base"
